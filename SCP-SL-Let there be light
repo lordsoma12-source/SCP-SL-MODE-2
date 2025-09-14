@@ -1,0 +1,123 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Exiled.API.Features;
+using Exiled.API.Enums;
+using Exiled.API.Interfaces;
+using Exiled.Events.EventArgs;
+using Exiled.Events.Handlers;
+using MEC;
+
+namespace LetThereBeLight
+{
+    public class Plugin : Plugin<Config>
+    {
+        public override string Author => "빛이 있으라 모드 제작";
+        public override string Name => "LetThereBeLight";
+        public override string Prefix => "LTBL";
+        public override Version Version => new Version(1, 0, 0);
+
+        private EventHandlers handlers;
+
+        public override void OnEnabled()
+        {
+            handlers = new EventHandlers(this);
+            Exiled.Events.Handlers.Server.RoundStarted += handlers.OnRoundStarted;
+            Exiled.Events.Handlers.Player.Spawning += handlers.OnSpawning;
+            Exiled.Events.Handlers.Player.Dying += handlers.OnDying;
+            Exiled.Events.Handlers.Player.Hurting += handlers.OnHurting;
+            base.OnEnabled();
+        }
+
+        public override void OnDisabled()
+        {
+            Exiled.Events.Handlers.Server.RoundStarted -= handlers.OnRoundStarted;
+            Exiled.Events.Handlers.Player.Spawning -= handlers.OnSpawning;
+            Exiled.Events.Handlers.Player.Dying -= handlers.OnDying;
+            Exiled.Events.Handlers.Player.Hurting -= handlers.OnHurting;
+            handlers = null;
+            base.OnDisabled();
+        }
+    }
+
+    public class Config : IConfig
+    {
+        public bool IsEnabled { get; set; } = true;
+        public int LanternDrainRate { get; set; } = 2; // 항마력 소모율
+        public int LanternRecoveryRate { get; set; } = 1; // 회복 속도
+        public int Min173Count { get; set; } = 1; // 최소 173
+        public float Ratio173 { get; set; } = 0.25f; // 플레이어 수 대비 173 비율 (예: 0.25면 4명 중 1명)
+    }
+
+    public class EventHandlers
+    {
+        private readonly Plugin plugin;
+        private Dictionary<Player, int> sanity = new Dictionary<Player, int>();
+
+        public EventHandlers(Plugin plugin)
+        {
+            this.plugin = plugin;
+        }
+
+        public void OnRoundStarted()
+        {
+            int playerCount = Player.List.Count();
+            int scpCount = Math.Max(plugin.Config.Min173Count, (int)Math.Round(playerCount * plugin.Config.Ratio173));
+
+            Log.Info($"라운드 시작: 플레이어 {playerCount}명, SCP-173 {scpCount}명 생성");
+
+            int assigned = 0;
+            foreach (Player player in Player.List)
+            {
+                if (assigned < scpCount)
+                {
+                    player.Role.Set(RoleTypeId.Scp173, SpawnReason.ForceClass);
+                    assigned++;
+                }
+                else
+                {
+                    player.Role.Set(RoleTypeId.ClassD, SpawnReason.ForceClass); // 인간팀
+                    sanity[player] = 100; // 항마력 시작치
+                }
+            }
+
+            // 전체 정전 (079 과부화 연출)
+            Map.TurnOffAllLights(9999f);
+        }
+
+        public void OnSpawning(SpawningEventArgs ev)
+        {
+            if (ev.Player.Role.Team == Team.ChaosInsurgency || ev.Player.Role.Team == Team.FoundationForces)
+            {
+                ev.Player.ClearInventory();
+                ev.Player.AddItem(ItemType.Flashlight);
+                ev.Player.AddItem(ItemType.KeycardFacilityManager);
+                sanity[ev.Player] = 100;
+            }
+        }
+
+        public void OnHurting(HurtingEventArgs ev)
+        {
+            if (ev.Attacker != null && ev.Attacker.Role.Type == RoleTypeId.Scp173)
+            {
+                if (sanity.ContainsKey(ev.Player))
+                {
+                    sanity[ev.Player] -= 20;
+                    ev.IsAllowed = false;
+                    if (sanity[ev.Player] <= 0)
+                    {
+                        ev.Player.Kill("항마력 소진");
+                    }
+                }
+            }
+        }
+
+        public void OnDying(DyingEventArgs ev)
+        {
+            if (sanity.ContainsKey(ev.Player))
+                sanity.Remove(ev.Player);
+        }
+    }
+}
+
+
